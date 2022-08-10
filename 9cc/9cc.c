@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+char *user_input;
 
 // トークンの種類
 typedef enum {
@@ -37,6 +38,19 @@ void error(char *fmt, ...) {
 	exit(1);
 }
 
+void error_at(char *loc, char *fmt, ...) {
+	va_list ap;
+	va_start(ap, fmt);
+
+	int pos = loc - user_input;
+	fprintf(stderr, "%s\n", user_input);
+	fprintf(stderr, "%*s", pos, " "); // pos個空白を出力
+	fprintf(stderr, "^ ");
+	vfprintf(stderr, fmt, ap);
+	fprintf(stderr, "\n");
+	exit(1);
+}
+
 // 次のトークンが期待している記号の時には、トークンを読み進め
 // 真を返す
 // それ以外は偽を返す
@@ -51,7 +65,7 @@ bool consume(char op) {
 // それ以外の場合はエラー報告をする。
 void expect(char op) {
 	if (token->kind != TK_RESERVED || token->str[0] != op) {
-		error("'%c'ではありません", op);
+		error_at(token->str, "'%c'ではありません", op);
 	}
 	token = token->next;
 }
@@ -60,7 +74,7 @@ void expect(char op) {
 // それ以外の場合はエラー
 int expect_number() {
 	if (token->kind != TK_NUM)
-		error("数ではありません");
+		error_at(token->str, "数ではありません");
 	int val = token->val;
 	token = token->next;
 	return val;
@@ -106,7 +120,7 @@ Token *tokenize(char *p) {
 			continue;
 		}
 
-		error("トークナイズできません");
+		error_at(token->str,"トークナイズできません");
 	}
 
 	new_token(TK_EOF, cur, p); // ここでインクリメントすると多分セグフォる
@@ -119,7 +133,8 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	token = tokenize(argv[1]);
+	user_input = argv[1];
+	token = tokenize(user_input);
 
 	printf(".text\n");
 	printf(".align 2\n");
