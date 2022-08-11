@@ -5,16 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "9cc.h"
+
+
 char *user_input;
-
-// トークンの種類
-typedef enum {
-	TK_RESERVED, // 記号
-	TK_NUM,      // 整数トークン
-	TK_EOF,
-} TokenKind;
-
-typedef struct Token Token;
 
 //トークン型
 struct Token {
@@ -27,6 +21,12 @@ struct Token {
 // 現在着目しているトークン
 Token *token;
 
+struct Node {
+	NodeKind kind; // ノードの型
+	Node *lhs;     // 左辺
+	Node *rhs;     // 右辺
+	int val;       // kindがND_NUMの場合のみ使う
+};
 
 // エラーを報告するための関数
 // printfと同じ引数をとる
@@ -108,7 +108,8 @@ Token *tokenize(char *p) {
 			continue;
 		}
 
-		if (*p == '+' || *p == '-') {
+		if (*p == '+' || *p == '-' || *p == '*' || *p == '/' ||
+				*p == '(' || *p == ')') {
 			cur = new_token(TK_RESERVED, cur, p++);
 			continue;
 		}
@@ -127,6 +128,116 @@ Token *tokenize(char *p) {
 	return head.next;
 }
 
+// 左辺と右辺を持つノード
+Node *new_node(NodeKind kind, Node *lhs, Node *rhs) {
+	Node *node = calloc(1, sizeof(Node));
+	node->kind = kind;
+	node->lhs = lhs;
+	node->rhs = rhs;
+	return node;
+}
+
+// 直接数値を持つノード
+Node *new_node_num(int val) {
+	Node *node = calloc(1, sizeof(Node));
+	node->kind = ND_NUM;
+	node->val = val;
+	return node;
+}
+
+// パース
+Node *expr() {
+	Node *node = mul();
+
+	for (;;) {
+		if (consume('+')) {
+			node = new_node(ND_ADD, node, mul());
+		} else  if (consume('-')) {
+			node = new_node(ND_SUB, node, mul());
+		} else {
+			return node;
+		}
+	}
+}
+
+Node *mul() {
+	Node *node = primary();
+
+	for (;;) {
+		if (consume('*')) {
+			node = new_node(ND_MUL, node, primary());
+		} else if (consume('/')) {
+			node = new_node(ND_DIV, node, primary());
+		} else {
+			return node;
+		}
+	}
+}
+
+Node *primary() {
+	if (consume('(')) {
+		Node *node = expr();
+		expect(')');
+		return node;
+	}
+	return new_node_num(expect_number());
+}
+
+void gen(Node *node) {
+	if (node->kind == ND_NUM) {
+		// spは16Nづつ動かすこと
+		printf("  sub sp, sp, #16\n");
+		// w8 <- val
+		printf("  mov w8, #%d\n", node->val);
+		// x8の内容をspから始まる領域に書き込む
+		printf("  str w8, [sp]\n");
+		// 注意:spは戻していない
+		return;
+	}
+
+	gen(node->lhs);
+	gen(node->rhs);
+
+	// w9 <- spから32bit * 4読み込んだもの
+	printf("  ldr w9, [sp]\n");
+	// sp+=16で、読み終わったデータ分戻る
+	printf("  add sp, sp, #16\n");
+	// w8 <- spから始まる32bit *4の領域のデータ
+	printf("  ldr w8, [sp]\n");
+	// sp+=16で、読み終わったデータ分戻る
+	printf("  add sp, sp, #16\n");
+
+	switch (node->kind) {
+		case ND_ADD:
+			// w8 <- w8 + w9
+			printf("  add w8, w8, w9\n");
+			break;
+		case ND_SUB:
+			// w8 <- w8 - w9
+			printf("  sub w8, w8, w9\n");
+			break;
+		case ND_MUL:
+			// w8 <- w8 * w9
+			printf("  mul w8, w8, w9\n");
+			break;
+		case ND_DIV:
+			// w8 <- w8 / w9
+			printf("  sdiv w8, w8, w9\n");
+			break;
+		case ND_NUM:
+			error("記号ではなく数字トークンを発見しました");
+			break;
+	}
+
+	// 16Nづつ動かす
+	printf("  sub sp, sp, #16\n");
+	// w8のデータをspから始まる32bit * 4の領域に書き込む
+	// wNは32bit*4のレジスタ
+	// w8は計算結果
+	printf("  str w8, [sp]\n");
+
+}
+
 int main(int argc, char **argv) {
 	if (argc != 2) {
 		fprintf(stderr, "引数の個数が正しくありません\n");
@@ -135,25 +246,31 @@ int main(int argc, char **argv) {
 
 	user_input = argv[1];
 	token = tokenize(user_input);
+	Node *node = expr();
 
 	printf(".text\n");
 	printf(".align 2\n");
 	printf(".global _main\n");
 	printf("_main:\n");
+	// 16Nづつ
+	printf("  sub sp, sp, #16\n");
+	// 32bitのzr(zero register)をspに書き込む
+	// 用途は不明
+	printf("  str wzr, [sp]\n");
 
-	// 式の最初は数でないとだめ
-	printf("  mov x0, %d\n", expect_number());
+	gen(node);
 
-	// `+N` `-N`を消費
-	while (!at_eof()) {
-		if (consume('+')) {
-			printf("  add x0, x0, %d\n", expect_number());
-			continue;
-		}
+	// 最終的な計算結果がスタックに残っているはずなので回収する
+	printf("  ldr w8, [sp]\n");
+	// spを戻してあげる
+	printf("  add sp, sp, #16\n"); // 計算結果を保存したw8のスタック
 
-		expect('-');
-		printf("  sub x0, x0, %d\n", expect_number());
-	}
+	// 戻り値w0にw8のデータを書き込んであげる
+	printf("  sub sp, sp, #16\n");
+	printf("  str w8, [sp]\n");
+	printf("  ldr w0, [sp]\n");
+	printf("  add sp, sp, #16\n"); // w8->w0に使用したスタック
+	printf("  add sp, sp, #16\n"); // wzrに使用したスタック
 
 	printf("  ret\n");
 	return 0;
