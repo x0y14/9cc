@@ -1,4 +1,7 @@
 #pragma once
+#include <stdbool.h>
+
+extern char *user_input;
 
 typedef enum {
 	TK_RESERVED,
@@ -8,7 +11,13 @@ typedef enum {
 
 typedef struct Token Token;
 
-struct Token;
+struct Token {
+	TokenKind kind;
+	Token *next;
+	int val;
+	char *str;
+};
+
 typedef enum {
 	ND_ADD,
 	ND_SUB,
@@ -19,28 +28,37 @@ typedef enum {
 
 typedef struct Node Node;
 
-struct Node;
+struct Node {
+	NodeKind kind;
+	Node *lhs;
+	Node *rhs;
+	int val;
+};
 
-void error(char*, ...);
-void error_at(char*, char*, ...);
+// parser
+void error(char *fmt, ...);
+void error_at(char *loc, char* fmt, ...);
 
-bool consume(char);
+bool consume(char op);
 
-void expect(char);
+void expect(char op);
 int expect_number();
 
 bool at_eof();
 
-Token *new_token(TokenKind, Token*, char*);
+Token *new_token(TokenKind kind, Token *cur, char *str);
 
-Token *tokenize(char*);
+Token *tokenize(char *p);
 
-Node *new_node(NodeKind, Node*, Node*);
-Node *new_node_num(int);
+Node *new_node(NodeKind kind, Node *lhs, Node *rhs);
+Node *new_node_num(int val);
 
-// Parse
 Node *expr();
 Node *mul();
 Node *primary();
 
-void gen(Node*);
+Node *parse(Token *tok);
+
+
+// codegen
+void gen(Node *node);

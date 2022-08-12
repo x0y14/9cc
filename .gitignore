@@ -2,6 +2,6 @@
 !/**/
 !*.*
 *.s
-
+*.o
 .DS_Store
 9cc/9cc.dSYM/
